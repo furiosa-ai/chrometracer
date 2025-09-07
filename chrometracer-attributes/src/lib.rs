@@ -20,6 +20,7 @@ pub fn instrument(_attr: TokenStream, item: TokenStream) -> TokenStream {
             if let Some(start) = start {
                 let span = chrometracer::Span {
                     name: stringify!(#name),
+                    tid: None,
                     from: start.elapsed(),
                     is_async: #is_async,
                 };

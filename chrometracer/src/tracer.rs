@@ -161,19 +161,42 @@ where
 
 pub struct Span {
     pub name: &'static str,
+    pub tid: Option<u64>,
     pub from: std::time::Duration,
     pub is_async: bool,
 }
 
 impl Drop for Span {
     fn drop(&mut self) {
-        crate::event!(name: self.name, from: self.from, is_async: self.is_async);
+        crate::event!(name: self.name, tid: self.tid, from: self.from, is_async: self.is_async);
     }
 }
 
 #[macro_export]
+macro_rules! span {
+    (name: $name:expr, is_async: $is_async: expr) => {
+        $crate::Span {
+            name: $name,
+            tid: None,
+            from: chrometracer::current(|tracer| tracer.map(|t| t.start.elapsed()))
+                .unwrap_or_default(),
+            is_async: $is_async,
+        }
+    };
+    (name: $name:expr, tid: $tid:expr, is_async: $is_async: expr) => {
+        $crate::Span {
+            name: $name,
+            tid: Some($tid as u64),
+            from: chrometracer::current(|tracer| tracer.map(|t| t.start.elapsed()))
+                .unwrap_or_default(),
+            is_async: $is_async,
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! event {
-    (name: $name:expr, from: $from:expr, is_async: $is_async:expr) => {
+    (name: $name:expr, tid: $tid:expr, from: $from:expr, is_async: $is_async:expr) => {
         $crate::current(|tracer| {
             if let Some(tracer) = tracer {
                 let event = $crate::SlimEvent {
@@ -181,7 +204,7 @@ macro_rules! event {
                     from: $from,
                     to: tracer.start.elapsed(),
                     is_async: $is_async,
-                    tid: tracer.tid,
+                    tid: $tid.unwrap_or(tracer.tid),
                 };
 
                 tracer.trace(event);
@@ -196,11 +219,11 @@ mod tests {
     fn event() {
         let _guard = crate::builder().init();
 
-        event!(name: "hello", from: std::time::Duration::from_secs(1), is_async: true);
+        event!(name: "hello", tid: None, from: std::time::Duration::from_secs(1), is_async: true);
     }
 
     #[test]
     fn without_init() {
-        event!(name: "hello", from: std::time::Duration::from_secs(1), is_async: false);
+        event!(name: "hello", tid: None, from: std::time::Duration::from_secs(1), is_async: false);
     }
 }
