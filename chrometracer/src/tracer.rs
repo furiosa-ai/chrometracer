@@ -21,7 +21,7 @@ pub struct SlimEvent {
 impl SlimEvent {
     fn write_json<W>(self, writer: &mut W)
     where
-        W: std::io::Write
+        W: std::io::Write,
     {
         let pid = std::process::id();
         let json = if self.is_async {
@@ -31,7 +31,14 @@ impl SlimEvent {
         } else {
             let ts = self.from.as_nanos() as f64 / 1000.0;
             let dur = (self.to.as_nanos() - self.from.as_nanos()) as f64 / 1000.0;
-            format!("{{\"name\":\"{}\",\"ts\":{},\"dur\":{},\"pid\":{},\"tid\":{},\"ph\":\"X\"}}", self.name, ts, dur, std::process::id(), self.tid)
+            format!(
+                "{{\"name\":\"{}\",\"ts\":{},\"dur\":{},\"pid\":{},\"tid\":{},\"ph\":\"X\"}}",
+                self.name,
+                ts,
+                dur,
+                std::process::id(),
+                self.tid
+            )
         };
         writer.write_all(json.as_bytes()).unwrap();
     }
@@ -143,7 +150,9 @@ where
         let mut tracer = c.borrow_mut();
         if tracer.is_none() {
             *tracer = unsafe { GLOBAL.clone() };
-            tracer.as_mut().map(|t| t.tid = std::thread::current().id().as_u64().into());
+            tracer
+                .as_mut()
+                .map(|t| t.tid = std::thread::current().id().as_u64().into());
         }
 
         f(tracer.as_ref())
@@ -180,7 +189,6 @@ macro_rules! event {
         })
     };
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -34,4 +34,3 @@ pub fn instrument(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     input.into_token_stream().into()
 }
-

@@ -3,4 +3,4 @@
 mod tracer;
 
 pub use chrometracer_attributes::instrument;
-pub use tracer::{builder, current, SlimEvent, Span};
+pub use tracer::{builder, current, ChromeTracerGuard, SlimEvent, Span};
