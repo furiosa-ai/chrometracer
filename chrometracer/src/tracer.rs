@@ -61,6 +61,9 @@ pub struct ChromeTracer {
 
     #[builder(default = "std::thread::current().id().as_u64().into()")]
     pub tid: u64,
+
+    #[builder(default = "\"trace.json\".to_string()")]
+    trace_file: String,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -107,9 +110,10 @@ impl ChromeTracer {
     fn init(&mut self) -> ChromeTracerGuard {
         let (sender, receiver) = crossbeam_channel::unbounded();
         self.sender = Some(sender.clone());
+        let trace_file = self.trace_file.clone();
 
         let handle = Some(thread::spawn(move || {
-            let mut writer = BufWriter::new(File::create("trace.json").unwrap());
+            let mut writer = BufWriter::new(File::create(trace_file).unwrap());
             let queue = ArrayQueue::new(1);
 
             writer.write_all(b"[\n").unwrap();
