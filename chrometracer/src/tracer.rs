@@ -9,7 +9,7 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     thread::{self, JoinHandle},
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 
 #[derive(Debug)]
@@ -58,6 +58,9 @@ static mut GLOBAL: Option<ChromeTracer> = None;
 pub struct ChromeTracer {
     #[builder(default = "Instant::now()")]
     pub start: Instant,
+
+    #[builder(default = "SystemTime::now()")]
+    pub systemtime: SystemTime,
 
     #[builder(
         default = "clock_gettime(ClockId::CLOCK_MONOTONIC).unwrap().num_nanoseconds() as u64"
