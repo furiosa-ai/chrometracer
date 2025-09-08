@@ -1,6 +1,8 @@
 use crossbeam_channel::Sender;
 use crossbeam_queue::ArrayQueue;
 use derive_builder::Builder;
+use nix::sys::time::TimeValLike;
+use nix::time::{clock_gettime, ClockId};
 use std::{
     cell::RefCell,
     fs::File,
@@ -55,6 +57,11 @@ static mut GLOBAL: Option<ChromeTracer> = None;
 pub struct ChromeTracer {
     #[builder(default = "Instant::now()")]
     pub start: Instant,
+
+    #[builder(
+        default = "clock_gettime(ClockId::CLOCK_MONOTONIC).unwrap().num_nanoseconds() as u64"
+    )]
+    pub start_ns: u64,
 
     #[builder(setter(skip))]
     sender: Option<Sender<ChromeTracerMessage>>,
