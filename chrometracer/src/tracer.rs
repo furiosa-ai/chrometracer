@@ -4,6 +4,7 @@ use derive_builder::Builder;
 use nix::sys::time::TimeValLike;
 use nix::time::{clock_gettime, ClockId};
 use std::{
+    borrow::Cow,
     cell::RefCell,
     fs::File,
     io::{BufWriter, Write},
@@ -13,7 +14,7 @@ use std::{
 
 #[derive(Debug)]
 pub struct SlimEvent {
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     pub from: std::time::Duration,
     pub to: std::time::Duration,
     pub is_async: bool,
@@ -179,7 +180,7 @@ pub struct Span {
 
 impl Drop for Span {
     fn drop(&mut self) {
-        crate::event!(name: self.name, tid: self.tid, from: self.from, is_async: self.is_async);
+        crate::event!(name: Cow::Borrowed(self.name), tid: self.tid, from: self.from, is_async: self.is_async);
     }
 }
 
@@ -241,15 +242,17 @@ macro_rules! event {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     #[test]
     fn event() {
         let _guard = crate::builder().init();
 
-        event!(name: "hello", tid: None, from: std::time::Duration::from_secs(1), is_async: true);
+        event!(name: Cow::Borrowed("hello"), tid: None, from: std::time::Duration::from_secs(1), is_async: true);
     }
 
     #[test]
     fn without_init() {
-        event!(name: "hello", tid: None, from: std::time::Duration::from_secs(1), is_async: false);
+        event!(name: Cow::Borrowed("hello"), tid: None, from: std::time::Duration::from_secs(1), is_async: false);
     }
 }
