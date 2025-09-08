@@ -215,6 +215,21 @@ macro_rules! event {
             }
         })
     };
+    (name: $name:expr, tid: $tid:expr, from: $from:expr, to: $to:expr, is_async: $is_async:expr) => {
+        $crate::current(|tracer| {
+            if let Some(tracer) = tracer {
+                let event = $crate::SlimEvent {
+                    name: $name,
+                    from: $from.duration_since(tracer.start),
+                    to: $to.duraion_since(tracer.start),
+                    is_async: $is_async,
+                    tid: $tid.unwrap_or(tracer.tid),
+                };
+
+                tracer.trace(event);
+            }
+        })
+    };
 }
 
 #[cfg(test)]
