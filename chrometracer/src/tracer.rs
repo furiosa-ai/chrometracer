@@ -8,6 +8,7 @@ use std::{
     cell::RefCell,
     fs::File,
     io::{BufWriter, Write},
+    sync::OnceLock,
     thread::{self, JoinHandle},
     time::{Instant, SystemTime},
 };
@@ -51,7 +52,7 @@ thread_local! {
     static CURRENT: RefCell<Option<ChromeTracer>> = RefCell::new(None);
 }
 
-static mut GLOBAL: Option<ChromeTracer> = None;
+static GLOBAL: OnceLock<ChromeTracer> = OnceLock::new();
 
 #[derive(Builder, Clone)]
 #[builder(custom_constructor, build_fn(private, name = "_build"))]
@@ -97,19 +98,16 @@ impl Drop for ChromeTracerGuard {
 
 impl ChromeTracerBuilder {
     pub fn init(&self) -> ChromeTracerGuard {
+        let mut tracer = self._build().expect("All required fields were initialized");
+        let guard = tracer.init();
+        
+        let _ = GLOBAL.get_or_init(|| tracer.clone());
+        
         CURRENT.with(|c| {
-            if unsafe { GLOBAL.is_some() } {
-                panic!("Unable to intialize ChromeTracer. A chrometracer already been set");
-            } else {
-                let mut tracer = self._build().expect("All required fields were initialized");
-                let guard = tracer.init();
-
-                unsafe { GLOBAL = Some(tracer.clone()) };
-                *c.borrow_mut() = Some(tracer);
-
-                guard
-            }
-        })
+            *c.borrow_mut() = Some(tracer);
+        });
+        
+        guard
     }
 }
 
@@ -164,10 +162,11 @@ where
     CURRENT.with(|c| {
         let mut tracer = c.borrow_mut();
         if tracer.is_none() {
-            *tracer = unsafe { GLOBAL.clone() };
-            tracer
-                .as_mut()
-                .map(|t| t.tid = std::thread::current().id().as_u64().into());
+            if let Some(global_tracer) = GLOBAL.get() {
+                let mut local_tracer = global_tracer.clone();
+                local_tracer.tid = std::thread::current().id().as_u64().into();
+                *tracer = Some(local_tracer);
+            }
         }
 
         f(tracer.as_ref())
