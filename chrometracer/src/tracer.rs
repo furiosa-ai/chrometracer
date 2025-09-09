@@ -16,6 +16,7 @@ use std::{
 #[derive(Debug)]
 pub struct SlimEvent {
     pub name: Cow<'static, str>,
+    pub args: Cow<'static, str>,
     pub from: std::time::Duration,
     pub to: std::time::Duration,
     pub is_async: bool,
@@ -31,17 +32,18 @@ impl SlimEvent {
         let json = if self.is_async {
             let begin = self.from.as_nanos() as f64 / 1000.0;
             let end = self.to.as_nanos() as f64 / 1000.0;
-            format!("{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"b\",\"cat\":\"async\"}},\n{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"e\",\"cat\":\"async\"}}", self.name, begin, pid, self.tid, self.from.as_nanos(), self.name, end, pid, self.tid, self.from.as_nanos())
+            format!("{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"b\",\"cat\":\"async\",\"args\":{{\"args\":\"{}\"}}}},\n{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"e\",\"cat\":\"async\"}}", self.name, begin, pid, self.tid, self.from.as_nanos(), self.args, self.name, end, pid, self.tid, self.from.as_nanos())
         } else {
             let ts = self.from.as_nanos() as f64 / 1000.0;
             let dur = (self.to.as_nanos() - self.from.as_nanos()) as f64 / 1000.0;
             format!(
-                "{{\"name\":\"{}\",\"ts\":{},\"dur\":{},\"pid\":{},\"tid\":{},\"ph\":\"X\"}}",
+                "{{\"name\":\"{}\",\"ts\":{},\"dur\":{},\"pid\":{},\"tid\":{},\"ph\":\"X\",\"args\":{{\"args\":\"{}\"}}}}",
                 self.name,
                 ts,
                 dur,
                 std::process::id(),
-                self.tid
+                self.tid,
+                self.args,
             )
         };
         writer.write_all(json.as_bytes()).unwrap();
@@ -100,13 +102,10 @@ impl ChromeTracerBuilder {
     pub fn init(&self) -> ChromeTracerGuard {
         let mut tracer = self._build().expect("All required fields were initialized");
         let guard = tracer.init();
-        
         let _ = GLOBAL.get_or_init(|| tracer.clone());
-        
         CURRENT.with(|c| {
             *c.borrow_mut() = Some(tracer);
         });
-        
         guard
     }
 }
@@ -174,7 +173,8 @@ where
 }
 
 pub struct Span {
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
+    pub args: Cow<'static, str>,
     pub tid: Option<u64>,
     pub from: std::time::Duration,
     pub is_async: bool,
@@ -182,24 +182,46 @@ pub struct Span {
 
 impl Drop for Span {
     fn drop(&mut self) {
-        crate::event!(name: Cow::Borrowed(self.name), tid: self.tid, from: self.from, is_async: self.is_async);
+        crate::event!(name: self.name.clone(), tid: self.tid, from: self.from, is_async: self.is_async, args: self.args.clone());
     }
 }
 
 #[macro_export]
 macro_rules! span {
-    (name: $name:expr, is_async: $is_async: expr) => {
+    (name: $name:expr, is_async: $is_async:expr) => {
         $crate::Span {
-            name: $name,
+            name: $name.into(),
+            args: "".into(),
             tid: None,
             from: chrometracer::current(|tracer| tracer.map(|t| t.start.elapsed()))
                 .unwrap_or_default(),
             is_async: $is_async,
         }
     };
-    (name: $name:expr, tid: $tid:expr, is_async: $is_async: expr) => {
+    (name: $name:expr, is_async: $is_async:expr, args: $args:expr) => {
         $crate::Span {
-            name: $name,
+            name: $name.into(),
+            args: $args.into(),
+            tid: None,
+            from: chrometracer::current(|tracer| tracer.map(|t| t.start.elapsed()))
+                .unwrap_or_default(),
+            is_async: $is_async,
+        }
+    };
+    (name: $name:expr, tid: $tid:expr, is_async: $is_async:expr) => {
+        $crate::Span {
+            name: $name.into(),
+            args: "".into(),
+            tid: Some($tid as u64),
+            from: chrometracer::current(|tracer| tracer.map(|t| t.start.elapsed()))
+                .unwrap_or_default(),
+            is_async: $is_async,
+        }
+    };
+    (name: $name:expr, tid: $tid:expr, is_async: $is_async:expr, args: $args:expr) => {
+        $crate::Span {
+            name: $name.into(),
+            args: $args.into(),
             tid: Some($tid as u64),
             from: chrometracer::current(|tracer| tracer.map(|t| t.start.elapsed()))
                 .unwrap_or_default(),
@@ -215,6 +237,23 @@ macro_rules! event {
             if let Some(tracer) = tracer {
                 let event = $crate::SlimEvent {
                     name: $name,
+                    args: "".into(),
+                    from: $from,
+                    to: tracer.start.elapsed(),
+                    is_async: $is_async,
+                    tid: $tid.unwrap_or(tracer.tid),
+                };
+
+                tracer.trace(event);
+            }
+        })
+    };
+    (name: $name:expr, tid: $tid:expr, from: $from:expr, is_async: $is_async:expr, args: $args:expr) => {
+        $crate::current(|tracer| {
+            if let Some(tracer) = tracer {
+                let event = $crate::SlimEvent {
+                    name: $name,
+                    args: $args.into(),
                     from: $from,
                     to: tracer.start.elapsed(),
                     is_async: $is_async,
@@ -230,6 +269,23 @@ macro_rules! event {
             if let Some(tracer) = tracer {
                 let event = $crate::SlimEvent {
                     name: $name,
+                    args: "".into(),
+                    from: $from.duration_since(tracer.start),
+                    to: $to.duraion_since(tracer.start),
+                    is_async: $is_async,
+                    tid: $tid.unwrap_or(tracer.tid),
+                };
+
+                tracer.trace(event);
+            }
+        })
+    };
+    (name: $name:expr, tid: $tid:expr, from: $from:expr, to: $to:expr, is_async: $is_async:expr, args: $args:expr) => {
+        $crate::current(|tracer| {
+            if let Some(tracer) = tracer {
+                let event = $crate::SlimEvent {
+                    name: $name,
+                    args: $args.into(),
                     from: $from.duration_since(tracer.start),
                     to: $to.duraion_since(tracer.start),
                     is_async: $is_async,
