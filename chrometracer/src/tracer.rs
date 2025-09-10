@@ -32,29 +32,21 @@ impl SlimEvent {
         let json = if self.is_async {
             let begin = self.from.as_nanos() as f64 / 1000.0;
             let end = self.to.as_nanos() as f64 / 1000.0;
-            format!("{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"b\",\"cat\":\"async\"{}}},\n{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"e\",\"cat\":\"async\"}}", self.name, begin, pid, self.tid, self.from.as_nanos(), self.format_args(), self.name, end, pid, self.tid, self.from.as_nanos())
+            format!("{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"b\",\"cat\":\"async\",\"args\":{{\"content\":\"{}\"}}}},\n{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"e\",\"cat\":\"async\"}}", self.name, begin, pid, self.tid, self.from.as_nanos(), self.args, self.name, end, pid, self.tid, self.from.as_nanos())
         } else {
             let ts = self.from.as_nanos() as f64 / 1000.0;
             let dur = (self.to.as_nanos() - self.from.as_nanos()) as f64 / 1000.0;
             format!(
-                "{{\"name\":\"{}\",\"ts\":{},\"dur\":{},\"pid\":{},\"tid\":{},\"ph\":\"X\"{}}}",
+                "{{\"name\":\"{}\",\"ts\":{},\"dur\":{},\"pid\":{},\"tid\":{},\"ph\":\"X\",\"args\":{{\"content\":\"{}\"}}}}",
                 self.name,
                 ts,
                 dur,
                 std::process::id(),
                 self.tid,
-                self.format_args()
+                self.args
             )
         };
         writer.write_all(json.as_bytes()).unwrap();
-    }
-    #[inline]
-    fn format_args(&self) -> Cow<'static, str> {
-        if !self.args.is_empty() {
-            format!(",\"args\":{{\"content\":\"{}\"}}", self.args).into()
-        } else {
-            "".into()
-        }
     }
 }
 

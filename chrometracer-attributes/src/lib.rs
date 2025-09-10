@@ -58,7 +58,7 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
             .unwrap()
             .args
             .map(|args| args.value())
-            .unwrap_or(String::new());
+            .unwrap_or_default();
 
         item.block = Box::new(parse_quote! {{
             let start = chrometracer::current(|tracer| tracer.map(|t| t.start));
