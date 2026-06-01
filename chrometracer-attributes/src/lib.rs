@@ -1,12 +1,14 @@
 use proc_macro::TokenStream;
 use quote::ToTokens;
 use syn::{
+    LitStr, Path, Result, Token,
     parse::{Parse, ParseStream, Parser},
-    parse_quote, LitStr, Result, Token,
+    parse_quote,
 };
 
 mod kw {
     syn::custom_keyword!(args);
+    syn::custom_keyword!(reexported_as);
 }
 
 struct Args {
@@ -22,9 +24,24 @@ impl Parse for Args {
     }
 }
 
+struct ReexportedAs {
+    crate_name: Path,
+}
+
+impl Parse for ReexportedAs {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let _ = input.parse::<kw::reexported_as>()?;
+        let _ = input.parse::<Token![=]>()?;
+        let crate_str: LitStr = input.parse()?;
+        let crate_name = crate_str.parse()?;
+        Ok(Self { crate_name })
+    }
+}
+
 #[derive(Debug, Default)]
 struct InstrumentAttr {
     args: Option<LitStr>,
+    crate_name: Option<Path>,
 }
 
 impl Parse for InstrumentAttr {
@@ -38,6 +55,12 @@ impl Parse for InstrumentAttr {
                 }
                 let args = input.parse::<Args>()?.value;
                 ret.args = Some(args);
+            } else if lookahead.peek(kw::reexported_as) {
+                if ret.crate_name.is_some() {
+                    return Err(input.error("expected only a single `reexported_as` argument"));
+                }
+                let crate_name = input.parse::<ReexportedAs>()?.crate_name;
+                ret.crate_name = Some(crate_name);
             } else {
                 let _ = input.parse::<proc_macro2::TokenTree>();
             }
@@ -54,17 +77,18 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
         let original = &item.block;
         let name = &item.sig.ident;
         let is_async = item.sig.asyncness.is_some();
-        let args = syn::parse::<InstrumentAttr>(attr)
-            .unwrap()
-            .args
-            .map(|args| args.value())
-            .unwrap_or_default();
+        let attr = syn::parse::<InstrumentAttr>(attr).unwrap();
+        let args = attr.args.map(|args| args.value()).unwrap_or_default();
+        let crate_name: Path = attr
+            .crate_name
+            .unwrap_or_else(|| parse_quote!(::chrometracer));
 
-        item.block = Box::new(parse_quote! {{
-            let start = chrometracer::current(|tracer| tracer.map(|t| t.start));
+        *item.block = parse_quote! {{
+            use #crate_name as __chrometracer;
+            let start = __chrometracer::current(|tracer| tracer.map(|t| t.start));
 
             if let Some(start) = start {
-                let span = chrometracer::Span {
+                let span = __chrometracer::Span {
                     name: stringify!(#name).into(),
                     args: #args.into(),
                     tid: None,
@@ -75,7 +99,7 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
             } else {
                 #original
             }
-        }});
+        }};
     } else {
         unreachable!()
     }
