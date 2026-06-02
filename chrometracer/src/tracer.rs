@@ -2,7 +2,7 @@ use crossbeam_channel::Sender;
 use crossbeam_queue::ArrayQueue;
 use derive_builder::Builder;
 use nix::sys::time::TimeValLike;
-use nix::time::{clock_gettime, ClockId};
+use nix::time::{ClockId, clock_gettime};
 use std::{
     borrow::Cow,
     cell::RefCell,
@@ -32,7 +32,20 @@ impl SlimEvent {
         let json = if self.is_async {
             let begin = self.from.as_nanos() as f64 / 1000.0;
             let end = self.to.as_nanos() as f64 / 1000.0;
-            format!("{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"b\",\"cat\":\"async\",\"args\":{{\"content\":\"{}\"}}}},\n{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"e\",\"cat\":\"async\"}}", self.name, begin, pid, self.tid, self.from.as_nanos(), self.args, self.name, end, pid, self.tid, self.from.as_nanos())
+            format!(
+                "{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"b\",\"cat\":\"async\",\"args\":{{\"content\":\"{}\"}}}},\n{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"e\",\"cat\":\"async\"}}",
+                self.name,
+                begin,
+                pid,
+                self.tid,
+                self.from.as_nanos(),
+                self.args,
+                self.name,
+                end,
+                pid,
+                self.tid,
+                self.from.as_nanos()
+            )
         } else {
             let ts = self.from.as_nanos() as f64 / 1000.0;
             let dur = (self.to.as_nanos() - self.from.as_nanos()) as f64 / 1000.0;
@@ -51,7 +64,7 @@ impl SlimEvent {
 }
 
 thread_local! {
-    static CURRENT: RefCell<Option<ChromeTracer>> = RefCell::new(None);
+    static CURRENT: RefCell<Option<ChromeTracer>> = const { RefCell::new(None) };
 }
 
 static GLOBAL: OnceLock<ChromeTracer> = OnceLock::new();
@@ -160,12 +173,12 @@ where
 {
     CURRENT.with(|c| {
         let mut tracer = c.borrow_mut();
-        if tracer.is_none() {
-            if let Some(global_tracer) = GLOBAL.get() {
-                let mut local_tracer = global_tracer.clone();
-                local_tracer.tid = std::thread::current().id().as_u64().into();
-                *tracer = Some(local_tracer);
-            }
+        if tracer.is_none()
+            && let Some(global_tracer) = GLOBAL.get()
+        {
+            let mut local_tracer = global_tracer.clone();
+            local_tracer.tid = std::thread::current().id().as_u64().into();
+            *tracer = Some(local_tracer);
         }
 
         f(tracer.as_ref())

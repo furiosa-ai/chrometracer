@@ -1,7 +1,7 @@
 [package]
 name = "chrometracer"
-version = "0.1.1"
-edition = "2021"
+version = "0.1.2"
+edition = "2024"
 
 authors = ["Youseok Yang <ileixe@gmail.com>"]
 categories = ["asynchronous", "development-tools::debugging", "development-tools::profiling"]
