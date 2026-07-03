@@ -1,5 +1,3 @@
-#![feature(thread_id_value)]
-
 mod tracer;
 
 pub use chrometracer_attributes::instrument;
