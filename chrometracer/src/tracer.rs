@@ -2,7 +2,7 @@ use crossbeam_channel::Sender;
 use crossbeam_queue::ArrayQueue;
 use derive_builder::Builder;
 use nix::sys::time::TimeValLike;
-use nix::time::{clock_gettime, ClockId};
+use nix::time::{ClockId, clock_gettime};
 use std::{
     borrow::Cow,
     cell::RefCell,
@@ -13,9 +13,32 @@ use std::{
     time::{Instant, SystemTime},
 };
 
+/// Stable replacement for the unstable `ThreadId::as_u64()` (`thread_id_value`
+/// feature). Extracts the same value from the `Debug` representation of
+/// `ThreadId` ("ThreadId(42)"). The format is not guaranteed, so if it ever
+/// changes this falls back to a process-wide monotonic counter, which keeps
+/// the same semantics (a unique integer per thread).
+fn current_thread_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_THREAD_ID: AtomicU64 = AtomicU64::new(1);
+    thread_local! {
+        static THREAD_ID: u64 = {
+            let debug = format!("{:?}", std::thread::current().id());
+            debug
+                .strip_prefix("ThreadId(")
+                .and_then(|s| s.strip_suffix(')'))
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed))
+        };
+    }
+    THREAD_ID.with(|id| *id)
+}
+
 #[derive(Debug)]
 pub struct SlimEvent {
     pub name: Cow<'static, str>,
+    pub args: Cow<'static, str>,
     pub from: std::time::Duration,
     pub to: std::time::Duration,
     pub is_async: bool,
@@ -31,17 +54,31 @@ impl SlimEvent {
         let json = if self.is_async {
             let begin = self.from.as_nanos() as f64 / 1000.0;
             let end = self.to.as_nanos() as f64 / 1000.0;
-            format!("{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"b\",\"cat\":\"async\"}},\n{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"e\",\"cat\":\"async\"}}", self.name, begin, pid, self.tid, self.from.as_nanos(), self.name, end, pid, self.tid, self.from.as_nanos())
+            format!(
+                "{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"b\",\"cat\":\"async\",\"args\":{{\"content\":\"{}\"}}}},\n{{\"name\":\"{}\",\"ts\":{},\"pid\":{},\"tid\":{},\"id\":{},\"ph\":\"e\",\"cat\":\"async\"}}",
+                self.name,
+                begin,
+                pid,
+                self.tid,
+                self.from.as_nanos(),
+                self.args,
+                self.name,
+                end,
+                pid,
+                self.tid,
+                self.from.as_nanos()
+            )
         } else {
             let ts = self.from.as_nanos() as f64 / 1000.0;
             let dur = (self.to.as_nanos() - self.from.as_nanos()) as f64 / 1000.0;
             format!(
-                "{{\"name\":\"{}\",\"ts\":{},\"dur\":{},\"pid\":{},\"tid\":{},\"ph\":\"X\"}}",
+                "{{\"name\":\"{}\",\"ts\":{},\"dur\":{},\"pid\":{},\"tid\":{},\"ph\":\"X\",\"args\":{{\"content\":\"{}\"}}}}",
                 self.name,
                 ts,
                 dur,
                 std::process::id(),
-                self.tid
+                self.tid,
+                self.args
             )
         };
         writer.write_all(json.as_bytes()).unwrap();
@@ -49,7 +86,7 @@ impl SlimEvent {
 }
 
 thread_local! {
-    static CURRENT: RefCell<Option<ChromeTracer>> = RefCell::new(None);
+    static CURRENT: RefCell<Option<ChromeTracer>> = const { RefCell::new(None) };
 }
 
 static GLOBAL: OnceLock<ChromeTracer> = OnceLock::new();
@@ -71,7 +108,7 @@ pub struct ChromeTracer {
     #[builder(setter(skip))]
     sender: Option<Sender<ChromeTracerMessage>>,
 
-    #[builder(default = "std::thread::current().id().as_u64().into()")]
+    #[builder(default = "current_thread_id()")]
     pub tid: u64,
 
     #[builder(default = "\"trace.json\".to_string()")]
@@ -100,13 +137,10 @@ impl ChromeTracerBuilder {
     pub fn init(&self) -> ChromeTracerGuard {
         let mut tracer = self._build().expect("All required fields were initialized");
         let guard = tracer.init();
-        
         let _ = GLOBAL.get_or_init(|| tracer.clone());
-        
         CURRENT.with(|c| {
             *c.borrow_mut() = Some(tracer);
         });
-        
         guard
     }
 }
@@ -161,12 +195,12 @@ where
 {
     CURRENT.with(|c| {
         let mut tracer = c.borrow_mut();
-        if tracer.is_none() {
-            if let Some(global_tracer) = GLOBAL.get() {
-                let mut local_tracer = global_tracer.clone();
-                local_tracer.tid = std::thread::current().id().as_u64().into();
-                *tracer = Some(local_tracer);
-            }
+        if tracer.is_none()
+            && let Some(global_tracer) = GLOBAL.get()
+        {
+            let mut local_tracer = global_tracer.clone();
+            local_tracer.tid = current_thread_id();
+            *tracer = Some(local_tracer);
         }
 
         f(tracer.as_ref())
@@ -174,7 +208,8 @@ where
 }
 
 pub struct Span {
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
+    pub args: Cow<'static, str>,
     pub tid: Option<u64>,
     pub from: std::time::Duration,
     pub is_async: bool,
@@ -182,24 +217,46 @@ pub struct Span {
 
 impl Drop for Span {
     fn drop(&mut self) {
-        crate::event!(name: Cow::Borrowed(self.name), tid: self.tid, from: self.from, is_async: self.is_async);
+        crate::event!(name: self.name.clone(), tid: self.tid, from: self.from, is_async: self.is_async, args: self.args.clone());
     }
 }
 
 #[macro_export]
 macro_rules! span {
-    (name: $name:expr, is_async: $is_async: expr) => {
+    (name: $name:expr, is_async: $is_async:expr) => {
         $crate::Span {
-            name: $name,
+            name: $name.into(),
+            args: "".into(),
             tid: None,
             from: chrometracer::current(|tracer| tracer.map(|t| t.start.elapsed()))
                 .unwrap_or_default(),
             is_async: $is_async,
         }
     };
-    (name: $name:expr, tid: $tid:expr, is_async: $is_async: expr) => {
+    (name: $name:expr, is_async: $is_async:expr, args: $args:expr) => {
         $crate::Span {
-            name: $name,
+            name: $name.into(),
+            args: $args.into(),
+            tid: None,
+            from: chrometracer::current(|tracer| tracer.map(|t| t.start.elapsed()))
+                .unwrap_or_default(),
+            is_async: $is_async,
+        }
+    };
+    (name: $name:expr, tid: $tid:expr, is_async: $is_async:expr) => {
+        $crate::Span {
+            name: $name.into(),
+            args: "".into(),
+            tid: Some($tid as u64),
+            from: chrometracer::current(|tracer| tracer.map(|t| t.start.elapsed()))
+                .unwrap_or_default(),
+            is_async: $is_async,
+        }
+    };
+    (name: $name:expr, tid: $tid:expr, is_async: $is_async:expr, args: $args:expr) => {
+        $crate::Span {
+            name: $name.into(),
+            args: $args.into(),
             tid: Some($tid as u64),
             from: chrometracer::current(|tracer| tracer.map(|t| t.start.elapsed()))
                 .unwrap_or_default(),
@@ -215,6 +272,23 @@ macro_rules! event {
             if let Some(tracer) = tracer {
                 let event = $crate::SlimEvent {
                     name: $name,
+                    args: "".into(),
+                    from: $from,
+                    to: tracer.start.elapsed(),
+                    is_async: $is_async,
+                    tid: $tid.unwrap_or(tracer.tid),
+                };
+
+                tracer.trace(event);
+            }
+        })
+    };
+    (name: $name:expr, tid: $tid:expr, from: $from:expr, is_async: $is_async:expr, args: $args:expr) => {
+        $crate::current(|tracer| {
+            if let Some(tracer) = tracer {
+                let event = $crate::SlimEvent {
+                    name: $name,
+                    args: $args.into(),
                     from: $from,
                     to: tracer.start.elapsed(),
                     is_async: $is_async,
@@ -230,6 +304,23 @@ macro_rules! event {
             if let Some(tracer) = tracer {
                 let event = $crate::SlimEvent {
                     name: $name,
+                    args: "".into(),
+                    from: $from.duration_since(tracer.start),
+                    to: $to.duraion_since(tracer.start),
+                    is_async: $is_async,
+                    tid: $tid.unwrap_or(tracer.tid),
+                };
+
+                tracer.trace(event);
+            }
+        })
+    };
+    (name: $name:expr, tid: $tid:expr, from: $from:expr, to: $to:expr, is_async: $is_async:expr, args: $args:expr) => {
+        $crate::current(|tracer| {
+            if let Some(tracer) = tracer {
+                let event = $crate::SlimEvent {
+                    name: $name,
+                    args: $args.into(),
                     from: $from.duration_since(tracer.start),
                     to: $to.duraion_since(tracer.start),
                     is_async: $is_async,

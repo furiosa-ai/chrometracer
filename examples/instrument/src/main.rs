@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-#[chrometracer::instrument(fields(name = format!("{}", "hello"), tid = 1))]
+#[chrometracer::instrument(fields(name = format!("{}", "hello"), tid = 1), args = "HELLO")]
 fn hello() {}
 
 #[chrometracer::instrument(event: "async", fields(name = format!("{}", "bye"), tid = 1))]

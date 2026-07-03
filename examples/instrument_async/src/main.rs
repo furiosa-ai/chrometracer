@@ -1,7 +1,5 @@
 #[chrometracer::instrument(fields(name = format!("{}", "hello"), tid = 1))]
-async fn hello() {
-    println!("Hello");
-}
+async fn hello() {}
 
 #[tokio::main]
 async fn main() {

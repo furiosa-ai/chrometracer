@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 #[chrometracer::instrument(fields(name = test_instrument))]
 fn test_instrument() {}
