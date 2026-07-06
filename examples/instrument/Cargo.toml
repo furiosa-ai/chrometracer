@@ -7,7 +7,3 @@ edition = "2024"
 
 [dependencies]
 chrometracer = { path = "../../chrometracer" }
-crossbeam-queue = "0.3.6"
-tokio = { version = "1.20.1", features = ["full"] }
-tracing = "0.1.36"
-tracing-subscriber = "0.3.15"
